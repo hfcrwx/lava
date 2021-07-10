@@ -1,0 +1,12 @@
+diff --git a/muduo/net/CMakeLists.txt b/muduo/net/CMakeLists.txt
+index 7510d87..0a608c6 100644
+--- a/muduo/net/CMakeLists.txt
++++ b/muduo/net/CMakeLists.txt
+@@ -46,6 +46,7 @@ set(HEADERS
+   EventLoopThread.h
+   EventLoopThreadPool.h
+   InetAddress.h
++  SocketsOps.h
+   TcpClient.h
+   TcpConnection.h
+   TcpServer.h
