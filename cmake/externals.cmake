@@ -8,6 +8,7 @@ ExternalProject_Add(
   PATCH_COMMAND patch -p1 < ${CMAKE_SOURCE_DIR}/patches/muduo.diff
   CMAKE_COMMAND cmake
   CMAKE_ARGS "-DCMAKE_BUILD_TYPE=Debug"
+  CMAKE_ARGS "-DMUDUO_BUILD_EXAMPLES=OFF"
 )
 ExternalProject_Add_StepDependencies(muduo-2_0_3 build hiredis-0_12_1)
 

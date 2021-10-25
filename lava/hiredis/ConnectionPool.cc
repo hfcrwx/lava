@@ -1,35 +1,35 @@
-#include "HiredisPool.h"
+#include "ConnectionPool.h"
 
-#include "Hiredis.h"
+#include <muduo/net/EventLoop.h>
 
 using namespace lava::hiredis;
 
-HiredisPool::HiredisPool(const muduo::net::InetAddress& serverAddr,
-                         const std::string& password__, int index__,
-                         size_t maxPoolSize)
+ConnectionPool::ConnectionPool(const muduo::net::InetAddress& serverAddr,
+                               const std::string& password__, int index__,
+                               size_t size)
     : serverAddr_(serverAddr),
       password_(password__),
       index_(index__),
-      maxPoolSize_(maxPoolSize) {}
+      size_(size) {}
 
-HiredisPool::~HiredisPool() { assert(pool_.empty()); }
+ConnectionPool::~ConnectionPool() { assert(pool_.empty()); }
 
-HiredisPtr HiredisPool::get(muduo::net::EventLoop* loop) {
+ConnectionPtr ConnectionPool::get(muduo::net::EventLoop* loop) {
   loop->assertInLoopThread();
   auto it = pool_.find(loop);
   if (it == pool_.end()) {
     {
       muduo::MutexLockGuard lock(mutex_);
-      pool_[loop] = std::deque<HiredisPtr>();
+      pool_[loop] = std::deque<ConnectionPtr>();
     }
 
     it = pool_.find(loop);
     assert(it != pool_.end());
   }
 
-  HiredisPtr c;
+  ConnectionPtr c;
   if (it->second.empty()) {
-    c.reset(new Hiredis(loop, serverAddr_));
+    c.reset(new Connection(loop, serverAddr_, this));
     return c;
   }
   c = it->second.front();
@@ -38,22 +38,22 @@ HiredisPtr HiredisPool::get(muduo::net::EventLoop* loop) {
   return c;
 }
 
-void HiredisPool::put(const HiredisPtr& c) {
+void ConnectionPool::put(const ConnectionPtr& c) {
   muduo::net::EventLoop* loop = c->getLoop();
   loop->assertInLoopThread();
   auto it = pool_.find(loop);
   assert(it != pool_.end());
-  if (it->second.size() >= maxPoolSize_) {
+  if (it->second.size() >= size_) {
     return;
   }
   it->second.push_back(c);
 }
 
 //必须保证请求都处理完
-void HiredisPool::clear() {
+void ConnectionPool::clear() {
   for (auto& i : pool_) {
     for (auto& c : i.second) {
-      i.first->runInLoop(std::bind(&Hiredis::disconnect, c));
+      i.first->runInLoop(std::bind(&Connection::disconnect, c));
     }
     i.second.clear();
   }

@@ -1,15 +1,16 @@
+// Adapted from muduo contrib/hiredis/Hiredis.cc
+
 #include "Hiredis.h"
 
 #include <hiredis/async.h>
+#include <muduo/base/Logging.h>
+#include <muduo/net/Channel.h>
+#include <muduo/net/EventLoop.h>
+#include <muduo/net/SocketsOps.h>
 
-#include "muduo/base/Logging.h"
-#include "muduo/net/Channel.h"
-#include "muduo/net/EventLoop.h"
-#include "muduo/net/SocketsOps.h"
-
+using namespace lava::hiredis;
 using namespace muduo;
 using namespace muduo::net;
-using namespace lava::hiredis;
 
 static void dummy(const std::shared_ptr<Channel>&) {}
 
@@ -59,9 +60,17 @@ void Hiredis::disconnect() {
   }
 }
 
-int Hiredis::fd() const {
-  assert(context_);
-  return context_->c.fd;
+int Hiredis::command(const CommandCallback& cb, muduo::StringArg cmd, ...) {
+  if (!connected()) return REDIS_ERR;
+
+  LOG_TRACE;
+  CommandCallback* p = new CommandCallback(cb);
+  va_list args;
+  va_start(args, cmd);
+  int ret =
+      ::redisvAsyncCommand(context_, commandCallback, p, cmd.c_str(), args);
+  va_end(args);
+  return ret;
 }
 
 void Hiredis::setChannel() {
@@ -87,29 +96,9 @@ void Hiredis::handleRead(muduo::Timestamp receiveTime) {
 
 void Hiredis::handleWrite() {
   if (!(context_->c.flags & REDIS_CONNECTED)) {
-    removeChannel();
+    removeChannel();  // connectCallback: setChannel();
   }
   ::redisAsyncHandleWrite(context_);
-}
-
-/* static */ Hiredis* Hiredis::getHiredis(const redisAsyncContext* ac) {
-  Hiredis* hiredis = static_cast<Hiredis*>(ac->ev.data);
-  assert(hiredis->context_ == ac);
-  return hiredis;
-}
-
-void Hiredis::logConnection(bool up) const {
-  InetAddress localAddr(sockets::getLocalAddr(fd()));
-  InetAddress peerAddr(sockets::getPeerAddr(fd()));
-
-  LOG_INFO << localAddr.toIpPort() << " -> " << peerAddr.toIpPort() << " is "
-           << (up ? "UP" : "DOWN");
-}
-
-/* static */ void Hiredis::connectCallback(const redisAsyncContext* ac,
-                                           int status) {
-  LOG_TRACE;
-  getHiredis(ac)->connectCallback(status);
 }
 
 void Hiredis::connectCallback(int status) {
@@ -118,18 +107,12 @@ void Hiredis::connectCallback(int status) {
               << serverAddr_.toIpPort();
   } else {
     logConnection(true);
-    setChannel();
+    setChannel();  // new Connection
   }
 
   if (connectCb_) {
     connectCb_(this, status);
   }
-}
-
-/* static */ void Hiredis::disconnectCallback(const redisAsyncContext* ac,
-                                              int status) {
-  LOG_TRACE;
-  getHiredis(ac)->disconnectCallback(status);
 }
 
 void Hiredis::disconnectCallback(int status) {
@@ -141,46 +124,40 @@ void Hiredis::disconnectCallback(int status) {
   }
 }
 
-void Hiredis::addRead(void* privdata) {
-  LOG_TRACE;
-  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
-  hiredis->channel_->enableReading();
+void Hiredis::commandCallback(redisReply* reply, CommandCallback* cb) {
+  (*cb)(this, reply);
+  delete cb;
 }
 
-void Hiredis::delRead(void* privdata) {
-  LOG_TRACE;
-  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
-  hiredis->channel_->disableReading();
+int Hiredis::fd() const {
+  assert(context_);
+  return context_->c.fd;
 }
 
-void Hiredis::addWrite(void* privdata) {
-  LOG_TRACE;
-  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
-  hiredis->channel_->enableWriting();
+void Hiredis::logConnection(bool up) const {
+  InetAddress localAddr(sockets::getLocalAddr(fd()));
+  InetAddress peerAddr(sockets::getPeerAddr(fd()));
+
+  LOG_INFO << localAddr.toIpPort() << " -> " << peerAddr.toIpPort() << " is "
+           << (up ? "UP" : "DOWN");
 }
 
-void Hiredis::delWrite(void* privdata) {
-  LOG_TRACE;
-  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
-  hiredis->channel_->disableWriting();
+/* static */ Hiredis* Hiredis::getHiredis(const redisAsyncContext* ac) {
+  Hiredis* hiredis = static_cast<Hiredis*>(ac->ev.data);
+  assert(hiredis->context_ == ac);
+  return hiredis;
 }
 
-void Hiredis::cleanup(void* privdata) {
-  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
-  LOG_DEBUG << hiredis;
+/* static */ void Hiredis::connectCallback(const redisAsyncContext* ac,
+                                           int status) {
+  LOG_TRACE;
+  getHiredis(ac)->connectCallback(status);
 }
 
-int Hiredis::command(const CommandCallback& cb, muduo::StringArg cmd, ...) {
-  if (!connected()) return REDIS_ERR;
-
+/* static */ void Hiredis::disconnectCallback(const redisAsyncContext* ac,
+                                              int status) {
   LOG_TRACE;
-  CommandCallback* p = new CommandCallback(cb);
-  va_list args;
-  va_start(args, cmd);
-  int ret =
-      ::redisvAsyncCommand(context_, commandCallback, p, cmd.c_str(), args);
-  va_end(args);
-  return ret;
+  getHiredis(ac)->disconnectCallback(status);
 }
 
 /* static */ void Hiredis::commandCallback(redisAsyncContext* ac, void* r,
@@ -190,16 +167,31 @@ int Hiredis::command(const CommandCallback& cb, muduo::StringArg cmd, ...) {
   getHiredis(ac)->commandCallback(reply, cb);
 }
 
-void Hiredis::commandCallback(redisReply* reply, CommandCallback* cb) {
-  (*cb)(this, reply);
-  delete cb;
+/* static */ void Hiredis::addRead(void* privdata) {
+  LOG_TRACE;
+  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
+  hiredis->channel_->enableReading();
 }
 
-int Hiredis::ping() {
-  return command(std::bind(&Hiredis::pingCallback, this, _1, _2), "PING");
+/* static */ void Hiredis::delRead(void* privdata) {
+  LOG_TRACE;
+  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
+  hiredis->channel_->disableReading();
 }
 
-void Hiredis::pingCallback(Hiredis* me, redisReply* reply) {
-  assert(this == me);
-  LOG_DEBUG << reply->str;
+/* static */ void Hiredis::addWrite(void* privdata) {
+  LOG_TRACE;
+  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
+  hiredis->channel_->enableWriting();
+}
+
+/* static */ void Hiredis::delWrite(void* privdata) {
+  LOG_TRACE;
+  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
+  hiredis->channel_->disableWriting();
+}
+
+/* static */ void Hiredis::cleanup(void* privdata) {
+  Hiredis* hiredis = static_cast<Hiredis*>(privdata);
+  LOG_DEBUG << hiredis;
 }

@@ -1,12 +1,12 @@
-#include <string>
+// Adapted from muduo contrib/hiredis/mredis.h
 
-#include "lava/hiredis/Hiredis.h"
+#include <lava/hiredis/Hiredis.h>
 #include <muduo/base/Logging.h>
 #include <muduo/net/EventLoop.h>
 
+using namespace lava;
 using namespace muduo;
 using namespace muduo::net;
-using namespace lava;
 
 string toString(long long value) {
   char buf[32];
@@ -60,7 +60,7 @@ void disconnectCallback(hiredis::Hiredis* c, int status) {
   }
 }
 
-void commandCallback1(hiredis::Hiredis* c, redisReply* reply) {
+void timeCallback(hiredis::Hiredis* c, redisReply* reply) {
   LOG_INFO << "time " << redisReplyToString(reply);
 }
 
@@ -97,10 +97,7 @@ int main(int argc, char** argv) {
   hiredis.setDisconnectCallback(disconnectCallback);
   hiredis.connect();
 
-  // hiredis.ping();
-  loop.runEvery(1.0, std::bind(&hiredis::Hiredis::ping, &hiredis));
-
-  hiredis.command(commandCallback1, "time");
+  hiredis.command(timeCallback, "time");
 
   string hi = "hi";
   hiredis.command(std::bind(echoCallback, _1, _2, &hi), "echo %s", hi.c_str());

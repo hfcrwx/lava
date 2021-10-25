@@ -1,17 +1,13 @@
-#include <string>
-
-#include "lava/hiredis/Hiredis.h"
-#include "lava/hiredis/HiredisPool.h"
-#include "lava/hiredis/HiredisRequest.h"
+#include <lava/hiredis/ConnectionPool.h>
+#include <lava/hiredis/Request.h>
 #include <muduo/base/CountDownLatch.h>
 #include <muduo/base/Logging.h>
 #include <muduo/net/EventLoop.h>
-
 #include <muduo/net/EventLoopThreadPool.h>
 
+using namespace lava;
 using namespace muduo;
 using namespace muduo::net;
-using namespace lava;
 
 string toString(long long value) {
   char buf[32];
@@ -49,14 +45,19 @@ string redisReplyToString(const redisReply* reply) {
   return str;
 }
 
-void commandCallback1(hiredis::Hiredis* c, redisReply* reply) {
+void commandCallback1(hiredis::Hiredis* c, redisReply* reply,
+                      hiredis::Request* req) {
   LOG_INFO << "time1 " << redisReplyToString(reply);
+  delete req;
 }
 
-void commandCallback2(hiredis::Hiredis* c, redisReply* reply, muduo::CountDownLatch* latch, int* type) {
+void commandCallback2(hiredis::Hiredis* c, redisReply* reply,
+                      hiredis::Request* req, muduo::CountDownLatch* latch,
+                      int* type) {
   LOG_INFO << "time2 " << redisReplyToString(reply);
   *type = reply->type;
   latch->countDown();
+  delete req;
 }
 
 int main(int argc, char** argv) {
@@ -68,17 +69,20 @@ int main(int argc, char** argv) {
   threadPool.start();
 
   InetAddress serverAddr("172.29.233.88", 6379);
-  hiredis::HiredisPool hiredisPool(serverAddr, "123456", 15);
+  hiredis::ConnectionPool hiredisPool(serverAddr, "123456", 15);
 
   //异步方式
-  hiredis::HiredisRequest request1(&hiredisPool, threadPool.getNextLoop());
-  request1.command(std::bind(commandCallback1, _1, _2), "time");
+  hiredis::Request* req1 =
+      new hiredis::Request(threadPool.getNextLoop(), &hiredisPool); // FIX 传EventLoopThreadPool
+  req1->execute(std::bind(commandCallback1, _1, _2, req1), "time"); // FIX 在EventLoopThreadPool::baseLoop里threadPool.getNextLoop()
 
   //半同步半异步方式
   muduo::CountDownLatch latch(1);
   int type = 0;
-  hiredis::HiredisRequest request2(&hiredisPool, threadPool.getNextLoop());
-  request2.command(std::bind(commandCallback2, _1, _2, &latch, &type), "time");
+  hiredis::Request* req2 =
+      new hiredis::Request(threadPool.getNextLoop(), &hiredisPool);
+  req2->execute(std::bind(commandCallback2, _1, _2, req2, &latch, &type),
+                "time");
   latch.wait();
   LOG_DEBUG << "type: " << type;
 
